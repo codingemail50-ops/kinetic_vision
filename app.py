@@ -28,7 +28,6 @@ if video_file:
     
     cap = cv2.VideoCapture(tfile.name)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    # Standard capture FPS fallback if metadata is missing
     real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=240.0)
 
     if analysis_mode == "Manual (Frame Scrubber)":
@@ -73,7 +72,8 @@ if video_file:
                 running_mode=mp.tasks.vision.RunningMode.VIDEO)
 
             toe_y, valid_frames = [], []
-            # We must process everything inside this "with" block to keep the AI active
+            temp_frames = {} # Temporary storage for verification images
+            
             with PoseLandmarker.create_from_options(options) as landmarker:
                 pbar = st.progress(0)
                 for f_idx in range(total_frames):
@@ -82,11 +82,19 @@ if video_file:
                     ts = int((f_idx / 30.0) * 1000)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                     res = landmarker.detect_for_video(mp_image, ts)
+                    
                     if res.pose_landmarks:
                         l = res.pose_landmarks[0]
-                        # Tracking average toe height (Landmarks 31 and 32)
                         toe_y.append(1.0 - (l[31].y + l[32].y) / 2.0)
                         valid_frames.append(f_idx)
+                        
+                        # Optimization: Store the drawn frame immediately during the main loop
+                        # This prevents needing to "re-track" the same frame later
+                        h, w, _ = frame.shape
+                        for t in [l[31], l[32]]:
+                            cv2.circle(frame, (int(t.x*w), int(t.y*h)), 10, (0, 255, 0), -1)
+                        temp_frames[f_idx] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    
                     if f_idx % 20 == 0: pbar.progress(f_idx / total_frames)
                 
                 if len(toe_y) > 50:
@@ -98,31 +106,18 @@ if video_file:
                         jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
                         t_off, l_nd = valid_frames[jump[0]], valid_frames[jump[-1]]
                         
-                        # --- AI EVENT VERIFICATION (STAYING INSIDE WITH BLOCK) ---
                         st.subheader("📸 AI Event Verification")
                         v1, v2 = st.columns(2)
                         
-                        def get_labeled_img(idx):
-                            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                            r, img = cap.read()
-                            if r:
-                                h, w, _ = img.shape
-                                mi = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                                res = landmarker.detect_for_video(mi, int((idx/30.0)*1000))
-                                if res.pose_landmarks:
-                                    for t in [res.pose_landmarks[0][31], res.pose_landmarks[0][32]]:
-                                        cv2.circle(img, (int(t.x*w), int(t.y*h)), 10, (0, 255, 0), -1)
-                                return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                            return None
-
-                        v1.image(get_labeled_img(t_off), caption=f"Takeoff: Frame {t_off}")
-                        v2.image(get_labeled_img(l_nd), caption=f"Landing: Frame {l_nd}")
+                        # Fetch the pre-drawn images from our dictionary
+                        if t_off in temp_frames:
+                            v1.image(temp_frames[t_off], caption=f"Takeoff: Frame {t_off}")
+                        if l_nd in temp_frames:
+                            v2.image(temp_frames[l_nd], caption=f"Landing: Frame {l_nd}")
                         
                         f_time = (l_nd - t_off) / real_fps
                         h_cm = (9.81 * (f_time**2) / 8) * 100
                         st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
                     else:
                         st.warning("No jump detected.")
-                else:
-                    st.error("Tracking failed. Ensure athlete is fully visible.")
     cap.release()
