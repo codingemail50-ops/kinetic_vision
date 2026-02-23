@@ -57,45 +57,36 @@ if video_file:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     file_fps = cap.get(cv2.CAP_PROP_FPS)
     
-    # --- OPTION A: MANUAL MODE ---
     if analysis_mode == "Manual (Frame Scrubber)":
         st.subheader("🖱️ Manual Event Selection")
         m_col1, m_col2 = st.columns([2, 1])
-        
         with m_col2:
             st.info("Pinpoint the frame where the toes break contact.")
             def update_frame(delta):
                 new_val = st.session_state.scrub_idx + delta
                 st.session_state.scrub_idx = max(0, min(total_frames - 1, new_val))
-
             st.write("**Frame Navigation**")
             nav_c1, nav_c2 = st.columns(2)
             nav_c1.button("⬅️ -1 Frame", on_click=update_frame, args=(-1,))
             nav_c2.button("+1 Frame ➡️", on_click=update_frame, args=(1,))
-            
             st.slider("Coarse Scrubber", 0, total_frames - 1, key="scrub_idx")
             current_f = st.session_state.scrub_idx
             st.write(f"**Current Frame:** `{current_f}`")
             st.divider()
-            
             b1, b2 = st.columns(2)
             if b1.button("📌 Set Takeoff"): st.session_state.takeoff_f = current_f
             if b2.button("📌 Set Landing"): st.session_state.landing_f = current_f
-            
             st.write(f"**Takeoff:** `{st.session_state.takeoff_f if st.session_state.takeoff_f is not None else '---'}`")
             st.write(f"**Landing:** `{st.session_state.landing_f if st.session_state.landing_f is not None else '---'}`")
-
             if st.button("🔄 Reset"):
-                st.session_state.takeoff_f = st.session_state.landing_f = None
+                st.session_state.takeoff_f = None
+                st.session_state.landing_f = None
                 if "scrub_idx" in st.session_state: del st.session_state["scrub_idx"]
                 st.rerun()
-
         with m_col1:
             cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.get("scrub_idx", 0))
             ret, frame = cap.read()
-            if ret:
-                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
-
+            if ret: st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
         if st.session_state.takeoff_f is not None and st.session_state.landing_f is not None:
             if st.session_state.landing_f > st.session_state.takeoff_f:
                 f_frames = st.session_state.landing_f - st.session_state.takeoff_f
@@ -105,7 +96,6 @@ if video_file:
                 st.success(f"### 📊 Manual Results: {h_cm:.2f} cm")
                 st.metric("Flight Time", f"{f_time:.3f} s")
 
-    # --- OPTION B: AUTO MODE ---
     else:
         st.subheader("🤖 AI Automated Analysis")
         if st.button("🚀 Start AI Extraction"):
@@ -121,89 +111,58 @@ if video_file:
                 running_mode=mp.tasks.vision.RunningMode.VIDEO)
 
             toe_y, valid_frames = [], []
-            preview_placeholder = st.empty() 
-
             with PoseLandmarker.create_from_options(options) as landmarker:
                 pbar = st.progress(0)
                 for f_idx in range(total_frames):
                     ret, frame = cap.read()
                     if not ret: break
-                    
-                    h, w, _ = frame.shape
                     timestamp_ms = int((f_idx / 30.0) * 1000) 
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                     res = landmarker.detect_for_video(mp_image, timestamp_ms)
-                    
                     if res.pose_landmarks:
                         landmarks = res.pose_landmarks[0]
                         avg_toe_y = (landmarks[31].y + landmarks[32].y) / 2.0
                         toe_y.append(1.0 - avg_toe_y)
                         valid_frames.append(f_idx)
-                    
-                    if f_idx % 20 == 0:
-                        pbar.progress(f_idx / total_frames)
+                    if f_idx % 20 == 0: pbar.progress(f_idx / total_frames)
                 
-                pbar.empty()
-                preview_placeholder.empty()
-
-            if len(toe_y) > 50:
-                y_smooth = np.convolve(toe_y, np.ones(3)/3, mode='same')
-                baseline = np.mean(y_smooth[:30])
-                air = np.where(y_smooth > (baseline + 0.01))[0]
-                
-                if len(air) > 0:
-                    jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
-                    t_off_f, l_nd_f = valid_frames[jump[0]], valid_frames[jump[-1]]
-                    f_frames = l_nd_f - t_off_f
-                    f_time = f_frames / real_fps
-                    h_cm = (9.81 * (f_time**2) / 8) * 100
-                    
-                    st.success(f"### 📐 Result: {h_cm:.2f} cm")
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Takeoff Frame", t_off_f)
-                    c2.metric("Landing Frame", l_nd_f)
-                    c3.metric("Total Air Frames", f_frames)
-                    
-                    # --- NEW: BIOMECHANICAL VALIDATION IMAGES ---
-                    st.divider()
-                    st.subheader("📸 AI Event Verification")
-                    iv_col1, iv_col2 = st.columns(2)
-                    
-                    # Re-open capture to grab the specific frames
-                    cap_verify = cv2.VideoCapture(tfile.name)
-                    
-                    # Helper to draw circles on a specific frame
-                    def get_annotated_frame(frame_idx):
-                        cap_verify.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                        ret, img = cap_verify.read()
-                        if not ret: return None
+                if len(toe_y) > 50:
+                    y_smooth = np.convolve(toe_y, np.ones(3)/3, mode='same')
+                    baseline = np.mean(y_smooth[:30])
+                    air = np.where(y_smooth > (baseline + 0.01))[0]
+                    if len(air) > 0:
+                        jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
+                        t_off_f, l_nd_f = valid_frames[jump[0]], valid_frames[jump[-1]]
+                        f_frames = l_nd_f - t_off_f
+                        f_time = f_frames / real_fps
+                        h_cm = (9.81 * (f_time**2) / 8) * 100
+                        st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
                         
-                        # Briefly run AI on just this frame to get dot positions
-                        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                        res = landmarker.detect_for_video(mp_img, int((frame_idx/30.0)*1000))
-                        if res.pose_landmarks:
-                            h, w, _ = img.shape
-                            l_toe, r_toe = res.pose_landmarks[0][31], res.pose_landmarks[0][32]
-                            for t in [l_toe, r_toe]:
-                                cv2.circle(img, (int(t.x*w), int(t.y*h)), 10, (0, 255, 0), -1)
-                        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                        st.divider()
+                        st.subheader("📸 AI Event Verification")
+                        iv_col1, iv_col2 = st.columns(2)
+                        
+                        def get_shot(idx):
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                            r, img = cap.read()
+                            if not r: return None
+                            # Draw circles
+                            mi = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                            res = landmarker.detect_for_video(mi, int((idx/30.0)*1000))
+                            if res.pose_landmarks:
+                                h, w, _ = img.shape
+                                for t in [res.pose_landmarks[0][31], res.pose_landmarks[0][32]]:
+                                    cv2.circle(img, (int(t.x*w), int(t.y*h)), 10, (0, 255, 0), -1)
+                            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-                    takeoff_img = get_annotated_frame(t_off_f)
-                    landing_img = get_annotated_frame(l_nd_f)
-                    
-                    if takeoff_img is not None:
-                        iv_col1.image(takeoff_img, caption=f"AI Detected Takeoff (Frame {t_off_f})", use_container_width=True)
-                    if landing_img is not None:
-                        iv_col2.image(landing_img, caption=f"AI Detected Landing (Frame {l_nd_f})", use_container_width=True)
-                    
-                    cap_verify.release()
-                    
-                    # Graph
-                    fig, ax = plt.subplots(figsize=(10, 3))
-                    ax.plot(valid_frames, y_smooth, color="#2ecc71")
-                    ax.axvspan(t_off_f, l_nd_f, color='yellow', alpha=0.3)
-                    st.pyplot(fig)
-                else: st.warning("No jump detected.")
-            else: st.error("Tracking failed.")
-
+                        t_img = get_shot(t_off_f)
+                        l_img = get_shot(l_nd_f)
+                        if t_img is not None: iv_col1.image(t_img, caption=f"Takeoff (Frame {t_off_f})")
+                        if l_img is not None: iv_col2.image(l_img, caption=f"Landing (Frame {l_nd_f})")
+                        
+                        fig, ax = plt.subplots(figsize=(10, 3))
+                        ax.plot(valid_frames, y_smooth, color="#2ecc71")
+                        ax.axvspan(t_off_f, l_nd_f, color='yellow', alpha=0.3)
+                        st.pyplot(fig)
+                    else: st.warning("No jump detected.")
     cap.release()
