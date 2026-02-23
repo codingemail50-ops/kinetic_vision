@@ -4,6 +4,5 @@ opencv-python-headless
 numpy
 requests
 matplotlib
-libgl1
-libgl1-mesa-glx
-ffmpeg
+
+
