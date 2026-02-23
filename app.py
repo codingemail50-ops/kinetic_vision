@@ -28,6 +28,7 @@ if video_file:
     
     cap = cv2.VideoCapture(tfile.name)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # Standard capture FPS fallback if metadata is missing
     real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=240.0)
 
     if analysis_mode == "Manual (Frame Scrubber)":
@@ -72,6 +73,7 @@ if video_file:
                 running_mode=mp.tasks.vision.RunningMode.VIDEO)
 
             toe_y, valid_frames = [], []
+            # We must process everything inside this "with" block to keep the AI active
             with PoseLandmarker.create_from_options(options) as landmarker:
                 pbar = st.progress(0)
                 for f_idx in range(total_frames):
@@ -82,6 +84,7 @@ if video_file:
                     res = landmarker.detect_for_video(mp_image, ts)
                     if res.pose_landmarks:
                         l = res.pose_landmarks[0]
+                        # Tracking average toe height (Landmarks 31 and 32)
                         toe_y.append(1.0 - (l[31].y + l[32].y) / 2.0)
                         valid_frames.append(f_idx)
                     if f_idx % 20 == 0: pbar.progress(f_idx / total_frames)
@@ -90,11 +93,12 @@ if video_file:
                     y_smooth = np.convolve(toe_y, np.ones(3)/3, mode='same')
                     baseline = np.mean(y_smooth[:30])
                     air = np.where(y_smooth > (baseline + 0.01))[0]
+                    
                     if len(air) > 0:
                         jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
                         t_off, l_nd = valid_frames[jump[0]], valid_frames[jump[-1]]
                         
-                        # --- FIXED VERIFICATION SECTION ---
+                        # --- AI EVENT VERIFICATION (STAYING INSIDE WITH BLOCK) ---
                         st.subheader("📸 AI Event Verification")
                         v1, v2 = st.columns(2)
                         
@@ -117,4 +121,8 @@ if video_file:
                         f_time = (l_nd - t_off) / real_fps
                         h_cm = (9.81 * (f_time**2) / 8) * 100
                         st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
+                    else:
+                        st.warning("No jump detected.")
+                else:
+                    st.error("Tracking failed. Ensure athlete is fully visible.")
     cap.release()
