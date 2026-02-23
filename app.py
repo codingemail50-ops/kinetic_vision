@@ -6,9 +6,6 @@ import tempfile
 import os
 import requests
 import matplotlib.pyplot as plt
-import subprocess
-import json
-import re
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Kinetic Vision Pro", page_icon="🧬", layout="wide")
@@ -18,30 +15,10 @@ if 'takeoff_f' not in st.session_state: st.session_state.takeoff_f = None
 if 'landing_f' not in st.session_state: st.session_state.landing_f = None
 if 'scrub_idx' not in st.session_state: st.session_state.scrub_idx = 0
 
-# --- SIDEBAR: GLOBAL SETTINGS ---
 st.sidebar.title("🚀 Control Hub")
 analysis_mode = st.sidebar.radio("Analysis Mode", ["Auto (AI Agent)", "Manual (Frame Scrubber)"])
 body_mass = st.sidebar.number_input("Athlete Mass (kg)", value=75.0, min_value=30.0)
 
-# --- HELPER: FPS DETECTOR ---
-def get_true_capture_fps(file_path, filename_str=""):
-    cap = cv2.VideoCapture(file_path)
-    header_fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.release()
-    if header_fps > 60: return header_fps, "Header"
-    match = re.search(r'(\d{3})\s?fps', filename_str, re.IGNORECASE)
-    if match: return float(match.group(1)), "Filename"
-    try:
-        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", file_path]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        data = json.loads(result.stdout)
-        tags = data.get('format', {}).get('tags', {})
-        if 'com.apple.quicktime.capture.fps' in tags:
-            return float(tags['com.apple.quicktime.capture.fps']), "Apple Metadata"
-    except: pass
-    return 240.0, "Default (Fallback)"
-
-# --- MAIN UI ---
 st.title("🧬 Kinetic Vision: Biomechanics Engine")
 video_file = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
 
@@ -49,52 +26,36 @@ if video_file:
     tfile = tempfile.NamedTemporaryFile(delete=False)
     tfile.write(video_file.read())
     
-    detected_fps, fps_source = get_true_capture_fps(tfile.name, video_file.name)
-    real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=detected_fps)
-    st.sidebar.caption(f"Source: {fps_source}")
-
     cap = cv2.VideoCapture(tfile.name)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    file_fps = cap.get(cv2.CAP_PROP_FPS)
-    
+    real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=240.0)
+
     if analysis_mode == "Manual (Frame Scrubber)":
         st.subheader("🖱️ Manual Event Selection")
         m_col1, m_col2 = st.columns([2, 1])
         with m_col2:
-            st.info("Pinpoint the frame where the toes break contact.")
             def update_frame(delta):
-                new_val = st.session_state.scrub_idx + delta
-                st.session_state.scrub_idx = max(0, min(total_frames - 1, new_val))
+                st.session_state.scrub_idx = max(0, min(total_frames - 1, st.session_state.scrub_idx + delta))
+            
             st.write("**Frame Navigation**")
-            nav_c1, nav_c2 = st.columns(2)
-            nav_c1.button("⬅️ -1 Frame", on_click=update_frame, args=(-1,))
-            nav_c2.button("+1 Frame ➡️", on_click=update_frame, args=(1,))
-            st.slider("Coarse Scrubber", 0, total_frames - 1, key="scrub_idx")
-            current_f = st.session_state.scrub_idx
-            st.write(f"**Current Frame:** `{current_f}`")
+            c1, c2 = st.columns(2)
+            c1.button("⬅️ -1", on_click=update_frame, args=(-1,))
+            c2.button("+1 ➡️", on_click=update_frame, args=(1,))
+            st.slider("Scrubber", 0, total_frames - 1, key="scrub_idx")
+            
             st.divider()
             b1, b2 = st.columns(2)
-            if b1.button("📌 Set Takeoff"): st.session_state.takeoff_f = current_f
-            if b2.button("📌 Set Landing"): st.session_state.landing_f = current_f
-            st.write(f"**Takeoff:** `{st.session_state.takeoff_f if st.session_state.takeoff_f is not None else '---'}`")
-            st.write(f"**Landing:** `{st.session_state.landing_f if st.session_state.landing_f is not None else '---'}`")
+            if b1.button("📌 Set Takeoff"): st.session_state.takeoff_f = st.session_state.scrub_idx
+            if b2.button("📌 Set Landing"): st.session_state.landing_f = st.session_state.scrub_idx
+            
             if st.button("🔄 Reset"):
-                st.session_state.takeoff_f = None
-                st.session_state.landing_f = None
-                if "scrub_idx" in st.session_state: del st.session_state["scrub_idx"]
+                st.session_state.takeoff_f = st.session_state.landing_f = None
                 st.rerun()
+
         with m_col1:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.get("scrub_idx", 0))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.scrub_idx)
             ret, frame = cap.read()
             if ret: st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
-        if st.session_state.takeoff_f is not None and st.session_state.landing_f is not None:
-            if st.session_state.landing_f > st.session_state.takeoff_f:
-                f_frames = st.session_state.landing_f - st.session_state.takeoff_f
-                f_time = f_frames / real_fps
-                h_cm = (9.81 * (f_time**2) / 8) * 100
-                st.divider()
-                st.success(f"### 📊 Manual Results: {h_cm:.2f} cm")
-                st.metric("Flight Time", f"{f_time:.3f} s")
 
     else:
         st.subheader("🤖 AI Automated Analysis")
@@ -116,13 +77,12 @@ if video_file:
                 for f_idx in range(total_frames):
                     ret, frame = cap.read()
                     if not ret: break
-                    timestamp_ms = int((f_idx / 30.0) * 1000) 
+                    ts = int((f_idx / 30.0) * 1000)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    res = landmarker.detect_for_video(mp_image, timestamp_ms)
+                    res = landmarker.detect_for_video(mp_image, ts)
                     if res.pose_landmarks:
-                        landmarks = res.pose_landmarks[0]
-                        avg_toe_y = (landmarks[31].y + landmarks[32].y) / 2.0
-                        toe_y.append(1.0 - avg_toe_y)
+                        l = res.pose_landmarks[0]
+                        toe_y.append(1.0 - (l[31].y + l[32].y) / 2.0)
                         valid_frames.append(f_idx)
                     if f_idx % 20 == 0: pbar.progress(f_idx / total_frames)
                 
@@ -132,37 +92,29 @@ if video_file:
                     air = np.where(y_smooth > (baseline + 0.01))[0]
                     if len(air) > 0:
                         jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
-                        t_off_f, l_nd_f = valid_frames[jump[0]], valid_frames[jump[-1]]
-                        f_frames = l_nd_f - t_off_f
-                        f_time = f_frames / real_fps
-                        h_cm = (9.81 * (f_time**2) / 8) * 100
-                        st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
+                        t_off, l_nd = valid_frames[jump[0]], valid_frames[jump[-1]]
                         
-                        st.divider()
+                        # --- FIXED VERIFICATION SECTION ---
                         st.subheader("📸 AI Event Verification")
-                        iv_col1, iv_col2 = st.columns(2)
+                        v1, v2 = st.columns(2)
                         
-                        def get_shot(idx):
+                        def get_labeled_img(idx):
                             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
                             r, img = cap.read()
-                            if not r: return None
-                            # Draw circles
-                            mi = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                            res = landmarker.detect_for_video(mi, int((idx/30.0)*1000))
-                            if res.pose_landmarks:
+                            if r:
                                 h, w, _ = img.shape
-                                for t in [res.pose_landmarks[0][31], res.pose_landmarks[0][32]]:
-                                    cv2.circle(img, (int(t.x*w), int(t.y*h)), 10, (0, 255, 0), -1)
-                            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                                mi = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                                res = landmarker.detect_for_video(mi, int((idx/30.0)*1000))
+                                if res.pose_landmarks:
+                                    for t in [res.pose_landmarks[0][31], res.pose_landmarks[0][32]]:
+                                        cv2.circle(img, (int(t.x*w), int(t.y*h)), 10, (0, 255, 0), -1)
+                                return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                            return None
 
-                        t_img = get_shot(t_off_f)
-                        l_img = get_shot(l_nd_f)
-                        if t_img is not None: iv_col1.image(t_img, caption=f"Takeoff (Frame {t_off_f})")
-                        if l_img is not None: iv_col2.image(l_img, caption=f"Landing (Frame {l_nd_f})")
+                        v1.image(get_labeled_img(t_off), caption=f"Takeoff: Frame {t_off}")
+                        v2.image(get_labeled_img(l_nd), caption=f"Landing: Frame {l_nd}")
                         
-                        fig, ax = plt.subplots(figsize=(10, 3))
-                        ax.plot(valid_frames, y_smooth, color="#2ecc71")
-                        ax.axvspan(t_off_f, l_nd_f, color='yellow', alpha=0.3)
-                        st.pyplot(fig)
-                    else: st.warning("No jump detected.")
+                        f_time = (l_nd - t_off) / real_fps
+                        h_cm = (9.81 * (f_time**2) / 8) * 100
+                        st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
     cap.release()
