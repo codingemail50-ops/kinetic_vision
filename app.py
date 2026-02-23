@@ -3,276 +3,207 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import tempfile
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 import os
 import requests
 import matplotlib.pyplot as plt
+import subprocess
+import json
+import re
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Kinetic Vision AI",
-    page_icon="🧬",
-    layout="wide"
-)
+st.set_page_config(page_title="Kinetic Vision Pro", page_icon="🧬", layout="wide")
 
-# --- HEADER & PROTOCOL ---
+# --- SESSION STATE INITIALIZATION ---
+if 'takeoff_f' not in st.session_state: st.session_state.takeoff_f = None
+if 'landing_f' not in st.session_state: st.session_state.landing_f = None
+if 'scrub_idx' not in st.session_state: st.session_state.scrub_idx = 0
+
+# --- SIDEBAR: GLOBAL SETTINGS ---
+st.sidebar.title("🚀 Control Hub")
+analysis_mode = st.sidebar.radio("Analysis Mode", ["Auto (AI Agent)", "Manual (Frame Scrubber)"])
+body_mass = st.sidebar.number_input("Athlete Mass (kg)", value=75.0, min_value=30.0)
+
+# --- HELPER: FPS DETECTOR ---
+def get_true_capture_fps(file_path, filename_str=""):
+    cap = cv2.VideoCapture(file_path)
+    header_fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+    if header_fps > 60: return header_fps, "Header"
+    match = re.search(r'(\d{3})\s?fps', filename_str, re.IGNORECASE)
+    if match: return float(match.group(1)), "Filename"
+    try:
+        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", file_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        tags = data.get('format', {}).get('tags', {})
+        if 'com.apple.quicktime.capture.fps' in tags:
+            return float(tags['com.apple.quicktime.capture.fps']), "Apple Metadata"
+    except: pass
+    return 240.0, "Default (Fallback)"
+
+# --- MAIN UI ---
 st.title("🧬 Kinetic Vision: Biomechanics Engine")
-st.markdown("**Automated Vertical Displacement & Reactive Strength Analysis**")
-
-with st.expander("📋 Experimental Protocol (Read for Accuracy)", expanded=False):
-    st.markdown("""
-    **Device & Environment Setup:**
-    
-    1.  **High-Speed Capture:** Recording **MUST** be in **Slow Motion** (120 or 240 FPS).
-    2.  **Camera Position (CRITICAL):**
-        * **SIDE PROFILE (Sagittal Plane):** Camera must be perpendicular to the athlete.
-        * **Static Mount:** Prop phone against a wall. Do not hold by hand.
-    3.  **Subject Preparation:**
-        * **Contrast:** Wear attire that contrasts with the background.
-        * **Lighting:** High ambient light required.
-    """)
-
-# --- 1. MODEL INITIALIZATION ---
-model_path = 'pose_landmarker_lite.task'
-if not os.path.exists(model_path):
-    with st.spinner("Initializing Neural Network..."):
-        try:
-            url = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
-            r = requests.get(url, allow_redirects=True)
-            with open(model_path, 'wb') as f:
-                f.write(r.content)
-        except Exception as e:
-            st.error(f"Model Load Failure: {e}")
-
-# --- 2. DATA INGESTION ---
-st.divider()
-col1, col2, col3 = st.columns([2, 1, 1])
-
-with col1:
-    video_file = st.file_uploader("1. Ingest Video Sample (Side Profile)", type=['mp4', 'mov', 'avi'])
-
-with col2:
-    real_fps = st.selectbox(
-        "2. Temporal Resolution (FPS)",
-        options=[30, 60, 120, 240],
-        index=3, 
-        help="Select 240 for standard iOS/Android Slow-Mo."
-    )
-
-with col3:
-    body_mass = st.number_input(
-        "3. Athlete Mass (kg)",
-        min_value=30, 
-        max_value=150, 
-        value=75,
-        help="Required for Peak Power (Watts) calculation."
-    )
+video_file = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
 
 if video_file:
     tfile = tempfile.NamedTemporaryFile(delete=False)
     tfile.write(video_file.read())
     
+    detected_fps, fps_source = get_true_capture_fps(tfile.name, video_file.name)
+    real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=detected_fps)
+    st.sidebar.caption(f"Source: {fps_source}")
+
     cap = cv2.VideoCapture(tfile.name)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     file_fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # --- 3. COMPUTER VISION PIPELINE ---
-    BaseOptions = mp.tasks.BaseOptions
-    PoseLandmarker = vision.PoseLandmarker
-    PoseLandmarkerOptions = vision.PoseLandmarkerOptions
-    VisionRunningMode = vision.RunningMode
+    # --- OPTION A: MANUAL MODE ---
+    if analysis_mode == "Manual (Frame Scrubber)":
+        st.subheader("🖱️ Manual Event Selection")
+        m_col1, m_col2 = st.columns([2, 1])
+        
+        with m_col2:
+            st.info("Pinpoint the frame where the toes break contact.")
+            def update_frame(delta):
+                new_val = st.session_state.scrub_idx + delta
+                st.session_state.scrub_idx = max(0, min(total_frames - 1, new_val))
 
-    options = PoseLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=model_path),
-        running_mode=VisionRunningMode.VIDEO)
+            st.write("**Frame Navigation**")
+            nav_c1, nav_c2 = st.columns(2)
+            nav_c1.button("⬅️ -1 Frame", on_click=update_frame, args=(-1,))
+            nav_c2.button("+1 Frame ➡️", on_click=update_frame, args=(1,))
+            
+            st.slider("Coarse Scrubber", 0, total_frames - 1, key="scrub_idx")
+            current_f = st.session_state.scrub_idx
+            st.write(f"**Current Frame:** `{current_f}`")
+            st.divider()
+            
+            b1, b2 = st.columns(2)
+            if b1.button("📌 Set Takeoff"): st.session_state.takeoff_f = current_f
+            if b2.button("📌 Set Landing"): st.session_state.landing_f = current_f
+            
+            st.write(f"**Takeoff:** `{st.session_state.takeoff_f if st.session_state.takeoff_f is not None else '---'}`")
+            st.write(f"**Landing:** `{st.session_state.landing_f if st.session_state.landing_f is not None else '---'}`")
 
-    ankle_y_values = []
-    
-    try:
-        with PoseLandmarker.create_from_options(options) as landmarker:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            frame_idx = 0
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            if st.button("🔄 Reset"):
+                st.session_state.takeoff_f = st.session_state.landing_f = None
+                if "scrub_idx" in st.session_state: del st.session_state["scrub_idx"]
+                st.rerun()
+
+        with m_col1:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.get("scrub_idx", 0))
+            ret, frame = cap.read()
+            if ret:
+                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+        if st.session_state.takeoff_f is not None and st.session_state.landing_f is not None:
+            if st.session_state.landing_f > st.session_state.takeoff_f:
+                f_frames = st.session_state.landing_f - st.session_state.takeoff_f
+                f_time = f_frames / real_fps
+                h_cm = (9.81 * (f_time**2) / 8) * 100
+                st.divider()
+                st.success(f"### 📊 Manual Results: {h_cm:.2f} cm")
+                st.metric("Flight Time", f"{f_time:.3f} s")
+
+    # --- OPTION B: AUTO MODE ---
+    else:
+        st.subheader("🤖 AI Automated Analysis")
+        if st.button("🚀 Start AI Extraction"):
+            model_path = 'pose_landmarker_lite.task'
+            if not os.path.exists(model_path):
+                r = requests.get("https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task")
+                with open(model_path, 'wb') as f: f.write(r.content)
+
+            BaseOptions = mp.tasks.BaseOptions
+            PoseLandmarker = mp.tasks.vision.PoseLandmarker
+            options = mp.tasks.vision.PoseLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=model_path),
+                running_mode=mp.tasks.vision.RunningMode.VIDEO)
+
+            toe_y, valid_frames = [], []
+            preview_placeholder = st.empty() 
+
+            with PoseLandmarker.create_from_options(options) as landmarker:
+                pbar = st.progress(0)
+                for f_idx in range(total_frames):
+                    ret, frame = cap.read()
+                    if not ret: break
+                    
+                    h, w, _ = frame.shape
+                    timestamp_ms = int((f_idx / 30.0) * 1000) 
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    res = landmarker.detect_for_video(mp_image, timestamp_ms)
+                    
+                    if res.pose_landmarks:
+                        landmarks = res.pose_landmarks[0]
+                        avg_toe_y = (landmarks[31].y + landmarks[32].y) / 2.0
+                        toe_y.append(1.0 - avg_toe_y)
+                        valid_frames.append(f_idx)
+                    
+                    if f_idx % 20 == 0:
+                        pbar.progress(f_idx / total_frames)
                 
-                image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
-                timestamp_ms = int((frame_idx / file_fps) * 1000)
+                pbar.empty()
+                preview_placeholder.empty()
+
+            if len(toe_y) > 50:
+                y_smooth = np.convolve(toe_y, np.ones(3)/3, mode='same')
+                baseline = np.mean(y_smooth[:30])
+                air = np.where(y_smooth > (baseline + 0.01))[0]
                 
-                detection_result = landmarker.detect_for_video(mp_image, timestamp_ms)
-                
-                if detection_result.pose_landmarks:
-                    landmarks = detection_result.pose_landmarks[0]
-                    y_pos = 1.0 - landmarks[27].y # Invert Y so up is positive
-                    ankle_y_values.append(y_pos)
-                else:
-                    ankle_y_values.append(None)
-                
-                frame_idx += 1
-                if frame_idx % 10 == 0:
-                    progress_bar.progress(min(frame_idx / frame_count, 1.0))
-                    status_text.text(f"Extracting Kinematics... Frame {frame_idx}/{frame_count}")
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-    except Exception as e:
-        st.error(f"Processing Error: {e}")
+                if len(air) > 0:
+                    jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
+                    t_off_f, l_nd_f = valid_frames[jump[0]], valid_frames[jump[-1]]
+                    f_frames = l_nd_f - t_off_f
+                    f_time = f_frames / real_fps
+                    h_cm = (9.81 * (f_time**2) / 8) * 100
+                    
+                    st.success(f"### 📐 Result: {h_cm:.2f} cm")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Takeoff Frame", t_off_f)
+                    c2.metric("Landing Frame", l_nd_f)
+                    c3.metric("Total Air Frames", f_frames)
+                    
+                    # --- NEW: BIOMECHANICAL VALIDATION IMAGES ---
+                    st.divider()
+                    st.subheader("📸 AI Event Verification")
+                    iv_col1, iv_col2 = st.columns(2)
+                    
+                    # Re-open capture to grab the specific frames
+                    cap_verify = cv2.VideoCapture(tfile.name)
+                    
+                    # Helper to draw circles on a specific frame
+                    def get_annotated_frame(frame_idx):
+                        cap_verify.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                        ret, img = cap_verify.read()
+                        if not ret: return None
+                        
+                        # Briefly run AI on just this frame to get dot positions
+                        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                        res = landmarker.detect_for_video(mp_img, int((frame_idx/30.0)*1000))
+                        if res.pose_landmarks:
+                            h, w, _ = img.shape
+                            l_toe, r_toe = res.pose_landmarks[0][31], res.pose_landmarks[0][32]
+                            for t in [l_toe, r_toe]:
+                                cv2.circle(img, (int(t.x*w), int(t.y*h)), 10, (0, 255, 0), -1)
+                        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+                    takeoff_img = get_annotated_frame(t_off_f)
+                    landing_img = get_annotated_frame(l_nd_f)
+                    
+                    if takeoff_img is not None:
+                        iv_col1.image(takeoff_img, caption=f"AI Detected Takeoff (Frame {t_off_f})", use_container_width=True)
+                    if landing_img is not None:
+                        iv_col2.image(landing_img, caption=f"AI Detected Landing (Frame {l_nd_f})", use_container_width=True)
+                    
+                    cap_verify.release()
+                    
+                    # Graph
+                    fig, ax = plt.subplots(figsize=(10, 3))
+                    ax.plot(valid_frames, y_smooth, color="#2ecc71")
+                    ax.axvspan(t_off_f, l_nd_f, color='yellow', alpha=0.3)
+                    st.pyplot(fig)
+                else: st.warning("No jump detected.")
+            else: st.error("Tracking failed.")
 
     cap.release()
-
-    # --- 4. PHYSICS ENGINE ---
-    # We map data to indices to keep track of frames correctly
-    # Replace None with NaN for plotting breaks
-    y_plot = np.array([y if y is not None else np.nan for y in ankle_y_values])
-    
-    # Create a clean version for math (no NaNs)
-    valid_indices = [i for i, y in enumerate(ankle_y_values) if y is not None]
-    valid_values = [ankle_y_values[i] for i in valid_indices]
-    
-    if len(valid_values) > 30:
-        y_clean = np.array(valid_values)
-        
-        # Smoothing
-        kernel_size = 3
-        kernel = np.ones(kernel_size) / kernel_size
-        y_smooth = np.convolve(y_clean, kernel, mode='same')
-        
-        # Baseline & Threshold
-        baseline = np.mean(y_smooth[:30])
-        threshold = baseline + 0.02 
-        
-        in_air_indices = np.where(y_smooth > threshold)[0]
-        
-        if len(in_air_indices) > 0:
-            # Event Detection
-            splits = np.split(in_air_indices, np.where(np.diff(in_air_indices) > 5)[0] + 1)
-            jump_event = max(splits, key=len)
-            
-            # These are indices relative to y_clean/y_smooth
-            takeoff_idx_local = jump_event[0]
-            landing_idx_local = jump_event[-1]
-            
-            # Map back to GLOBAL frame numbers (for images)
-            takeoff_frame = valid_indices[takeoff_idx_local]
-            landing_frame = valid_indices[landing_idx_local]
-            
-            flight_frames = landing_frame - takeoff_frame
-            flight_time = flight_frames / real_fps
-            
-            height_m = (9.81 * (flight_time**2)) / 8
-            height_cm = height_m * 100
-            
-            # RSI Logic
-            start_search_idx = max(0, takeoff_idx_local - int(1.5 * real_fps))
-            pre_takeoff_slice = y_smooth[start_search_idx:takeoff_idx_local]
-            
-            if len(pre_takeoff_slice) > 0:
-                dip_idx_relative = np.argmin(pre_takeoff_slice)
-                dip_idx_local = start_search_idx + dip_idx_relative
-                dip_frame_global = valid_indices[dip_idx_local]
-                
-                time_to_takeoff = (takeoff_frame - dip_frame_global) / real_fps
-                if time_to_takeoff < 0.1: time_to_takeoff = 0.4
-                rsi_mod = height_m / time_to_takeoff
-            else:
-                rsi_mod = 0.0
-                dip_idx_local = takeoff_idx_local # Fallback
-                dip_frame_global = takeoff_frame
-
-            peak_power = (60.7 * height_cm) + (45.3 * body_mass) - 2055
-
-            # --- RESULTS ---
-            st.divider()
-            if 10 < height_cm < 120:
-                st.success(f"### 📐 Vertical Displacement: {height_cm:.2f} cm")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Flight Time", f"{flight_time:.3f} s")
-                m2.metric("RSI-mod", f"{rsi_mod:.2f}")
-                m3.metric("Peak Power", f"{int(peak_power)} W")
-            else:
-                st.warning(f"Calculated: {height_cm:.2f} cm")
-                st.info("Check FPS selection.")
-            
-            # --- GRAPHING ENGINE (MATPLOTLIB) ---
-            st.divider()
-            st.subheader("📊 Biomechanical Trajectory")
-            
-            fig, ax = plt.subplots(figsize=(10, 4))
-            # Plot the smoothed curve
-            # We use valid_indices for X-axis so it matches frame numbers
-            ax.plot(valid_indices, y_smooth, label='Ankle Vertical Velocity', color='#2980b9', linewidth=2)
-            
-            # Annotate Key Points
-            apex_idx_local = takeoff_idx_local + (len(jump_event) // 2)
-            
-            # Get (X, Y) coordinates for the dots
-            x_dip = valid_indices[dip_idx_local]
-            y_dip = y_smooth[dip_idx_local]
-            
-            x_takeoff = valid_indices[takeoff_idx_local]
-            y_takeoff = y_smooth[takeoff_idx_local]
-            
-            x_apex = valid_indices[apex_idx_local]
-            y_apex = y_smooth[apex_idx_local]
-            
-            # Plot Dots
-            ax.scatter([x_dip], [y_dip], color='red', s=100, zorder=5, label='Eccentric (Dip)')
-            ax.scatter([x_takeoff], [y_takeoff], color='gold', s=100, zorder=5, label='Concentric (Takeoff)')
-            ax.scatter([x_apex], [y_apex], color='green', s=100, zorder=5, label='Apex')
-            
-            # Styling
-            ax.set_ylabel("Vertical Position (Normalized)")
-            ax.set_xlabel("Frame Number")
-            ax.legend(loc='upper left')
-            ax.grid(True, linestyle='--', alpha=0.5)
-            
-            # Render in Streamlit
-            st.pyplot(fig)
-
-            # --- ANNOTATION ENGINE (IMAGES) ---
-            st.divider()
-            st.subheader("📸 Biomechanical Keyframes")
-            
-            apex_frame_global = valid_indices[apex_idx_local]
-            
-            targets = {
-                dip_frame_global: ("ECCENTRIC (DIP)", (0, 0, 255)),       
-                takeoff_frame:    ("CONCENTRIC (TAKEOFF)", (0, 255, 255)), 
-                apex_frame_global: (f"APEX ({height_cm:.1f}cm)", (0, 255, 0)) 
-            }
-            
-            cap.release() 
-            cap = cv2.VideoCapture(tfile.name)
-            captured_images = {}
-            curr_frame = 0
-            max_target = max(targets.keys())
-            
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret: break
-                if curr_frame in targets:
-                    label, color = targets[curr_frame]
-                    cv2.putText(frame, label, (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 2.5, (0,0,0), 15, cv2.LINE_AA)
-                    cv2.putText(frame, label, (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 2.5, color, 4, cv2.LINE_AA)
-                    captured_images[curr_frame] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                curr_frame += 1
-                if curr_frame > max_target: break
-            
-            cap.release()
-            
-            c1, c2, c3 = st.columns(3)
-            if dip_frame_global in captured_images:
-                c1.image(captured_images[dip_frame_global], use_container_width=True, caption="Phase 1: Loading")
-            if takeoff_frame in captured_images:
-                c2.image(captured_images[takeoff_frame], use_container_width=True, caption="Phase 2: Propulsion")
-            if apex_frame_global in captured_images:
-                c3.image(captured_images[apex_frame_global], use_container_width=True, caption="Phase 3: Max Height")
-
-        else:
-            st.warning("No significant vertical displacement detected.")
