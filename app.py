@@ -23,12 +23,12 @@ st.title("🧬 Kinetic Vision: Biomechanics Engine")
 video_file = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
 
 if video_file:
-    # Save video with suffix to help CV2 handle the file correctly
-    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    tfile.write(video_file.read())
-    tfile.close() 
+    # Use a fixed temporary file name to prevent multiple copies filling the server disk
+    temp_video_path = os.path.join(tempfile.gettempdir(), "temp_biomech_video.mp4")
+    with open(temp_video_path, "wb") as f:
+        f.write(video_file.read())
     
-    cap = cv2.VideoCapture(tfile.name)
+    cap = cv2.VideoCapture(temp_video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=240.0)
 
@@ -51,12 +51,8 @@ if video_file:
             if b1.button("📌 Set Takeoff"): st.session_state.takeoff_f = st.session_state.scrub_idx
             if b2.button("📌 Set Landing"): st.session_state.landing_f = st.session_state.scrub_idx
             
-            st.write(f"**Selected Takeoff:** {st.session_state.takeoff_f}")
-            st.write(f"**Selected Landing:** {st.session_state.landing_f}")
-            
             if st.button("🔄 Reset"):
-                st.session_state.takeoff_f = None
-                st.session_state.landing_f = None
+                st.session_state.takeoff_f = st.session_state.landing_f = None
                 st.rerun()
 
         with m_col1:
@@ -79,7 +75,7 @@ if video_file:
                 running_mode=mp.tasks.vision.RunningMode.VIDEO)
 
             toe_y, valid_frames = [], []
-            raw_frames_buffer = [] # Limited buffer to save memory
+            frame_cache = {} # Limited dictionary to store only specific images
 
             with mp.tasks.vision.PoseLandmarker.create_from_options(options) as landmarker:
                 pbar = st.progress(0)
@@ -90,47 +86,55 @@ if video_file:
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
                     
-                    # Track every frame but only store data points
+                    # Core Tracking Loop
                     res = landmarker.detect_for_video(mp_image, int((f_idx / 30.0) * 1000))
                     
                     if res.pose_landmarks and len(res.pose_landmarks) > 0:
                         l = res.pose_landmarks[0]
-                        toe_y.append(1.0 - (l[31].y + l[32].y) / 2.0)
+                        # Track average height of both toes
+                        y_val = 1.0 - (l[31].y + l[32].y) / 2.0
+                        toe_y.append(y_val)
                         valid_frames.append(f_idx)
-                        # We store the frame objects ONLY if they are part of the valid tracking sequence
-                        # This avoids memory crashes on very long videos
-                        raw_frames_buffer.append({'idx': f_idx, 'img': rgb_frame})
+                        
+                        # Optimization: Store frame in cache ONLY every 5 frames to save memory
+                        # We will pick the closest one for verification
+                        if f_idx % 5 == 0:
+                            frame_cache[f_idx] = rgb_frame
                     
                     if f_idx % 20 == 0: pbar.progress(f_idx / total_frames)
 
-                # Physics Engine
-                if len(toe_y) > 50:
-                    y_smooth = np.convolve(toe_y, np.ones(3)/3, mode='same')
-                    baseline = np.mean(y_smooth[:30])
-                    air = np.where(y_smooth > (baseline + 0.01))[0]
+            # Analysis Phase (Once Video is Released)
+            if len(toe_y) > 50:
+                y_smooth = np.convolve(toe_y, np.ones(3)/3, mode='same')
+                baseline = np.mean(y_smooth[:30])
+                air = np.where(y_smooth > (baseline + 0.01))[0]
+                
+                if len(air) > 0:
+                    jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
+                    t_off, l_nd = valid_frames[jump[0]], valid_frames[jump[-1]]
                     
-                    if len(air) > 0:
-                        jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
-                        t_off, l_nd = valid_frames[jump[0]], valid_frames[jump[-1]]
-                        
-                        st.subheader("📸 AI Event Verification")
-                        iv_c1, iv_c2 = st.columns(2)
-                        
-                        # Extract the exact frames from our buffer
-                        for f_data in raw_frames_buffer:
-                            if f_data['idx'] == t_off:
-                                iv_c1.image(f_data['img'], caption=f"Takeoff (Frame {t_off})")
-                            if f_data['idx'] == l_nd:
-                                iv_c2.image(f_data['img'], caption=f"Landing (Frame {l_nd})")
-                        
-                        f_time = (l_nd - t_off) / real_fps
-                        h_cm = (9.81 * (f_time**2) / 8) * 100
-                        st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
-                        
-                        fig, ax = plt.subplots(figsize=(10, 3))
-                        ax.plot(valid_frames, y_smooth, color="#2ecc71")
-                        ax.axvspan(t_off, l_nd, color='yellow', alpha=0.3)
-                        st.pyplot(fig)
-                    else: st.warning("Jump not detected.")
+                    st.subheader("📸 AI Event Verification")
+                    iv_c1, iv_c2 = st.columns(2)
+                    
+                    # Find closest cached frames for display
+                    t_cached = min(frame_cache.keys(), key=lambda x: abs(x - t_off))
+                    l_cached = min(frame_cache.keys(), key=lambda x: abs(x - l_nd))
+                    
+                    iv_c1.image(frame_cache[t_cached], caption=f"Takeoff (Approx Frame {t_off})")
+                    iv_c2.image(frame_cache[l_cached], caption=f"Landing (Approx Frame {l_nd})")
+                    
+                    f_time = (l_nd - t_off) / real_fps
+                    h_cm = (9.81 * (f_time**2) / 8) * 100
+                    st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
+                    
+                    fig, ax = plt.subplots(figsize=(10, 3))
+                    ax.plot(valid_frames, y_smooth, color="#2ecc71")
+                    ax.axvspan(t_off, l_nd, color='yellow', alpha=0.3)
+                    st.pyplot(fig)
+                else: st.warning("Jump not detected. Ensure full body is in frame.")
+    
     cap.release()
-    if os.path.exists(tfile.name): os.remove(tfile.name)
+    # Clean up the file only after capture is fully closed
+    if os.path.exists(temp_video_path):
+        try: os.remove(temp_video_path)
+        except: pass
