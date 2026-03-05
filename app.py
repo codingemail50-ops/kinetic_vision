@@ -7,42 +7,35 @@ import os
 import requests
 import matplotlib.pyplot as plt
 
-# --- PAGE CONFIGURATION ---
+# --- PAGE SETUP ---
 st.set_page_config(page_title="Kinetic Vision Pro", page_icon="🧬", layout="wide")
 
-# Persistent session state
+# Unique session state for each user
 if 'takeoff_f' not in st.session_state: st.session_state.takeoff_f = None
 if 'landing_f' not in st.session_state: st.session_state.landing_f = None
 if 'scrub_idx' not in st.session_state: st.session_state.scrub_idx = 0
 
 st.sidebar.title("🚀 Control Hub")
-analysis_mode = st.sidebar.radio("Analysis Mode", ["Auto (AI Agent)", "Manual (Frame Scrubber)"])
+analysis_mode = st.sidebar.radio("Mode", ["Auto (AI Agent)", "Manual (Scrubber)"])
 body_mass = st.sidebar.number_input("Athlete Mass (kg)", value=75.0)
 
 st.title("🧬 Kinetic Vision: Biomechanics Engine")
 video_file = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
 
 if video_file:
-    # Use a persistent path to ensure file availability
-    tfile_path = os.path.join(tempfile.gettempdir(), "kinetic_video.mp4")
-    with open(tfile_path, "wb") as f:
-        f.write(video_file.read())
+    # Use a unique temporary file per session
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
+        tmp_file.write(video_file.read())
+        video_path = tmp_file.name
     
-    cap = cv2.VideoCapture(tfile_path)
+    cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    # CALCULATE FPS
     detected_fps = cap.get(cv2.CAP_PROP_FPS)
-    if detected_fps < 60: detected_fps = 240.0 # Standard fallback
+    if detected_fps < 10: detected_fps = 240.0
     
-    st.sidebar.subheader("Physics Calibration")
-    # This value is the key to fixing the 7cm discrepancy.
-    # Set this to EXACTLY what your local version uses (e.g., 218.4)
-    real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=float(detected_fps), 
-                                       help="If results differ from local, match this FPS value to your local version.")
+    real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=float(detected_fps))
 
-    if analysis_mode == "Manual (Frame Scrubber)":
-        st.subheader("🖱️ Manual Event Selection")
+    if analysis_mode == "Manual (Scrubber)":
         m_col1, m_col2 = st.columns([2, 1])
         with m_col2:
             def update_frame(delta):
@@ -75,7 +68,6 @@ if video_file:
             st.success(f"### 📊 Result: {h_cm:.2f} cm")
 
     else:
-        st.subheader("🤖 AI Automated Analysis")
         if st.button("🚀 Start AI Extraction"):
             model_path = 'pose_landmarker_lite.task'
             if not os.path.exists(model_path):
@@ -88,16 +80,15 @@ if video_file:
 
             toe_y, valid_frames = [], []
             
-            # TRACKING PASS: No frame storage to keep memory low
             with mp.tasks.vision.PoseLandmarker.create_from_options(options) as landmarker:
                 pbar = st.progress(0)
                 for f_idx in range(total_frames):
                     ret, frame = cap.read()
                     if not ret: break
                     
-                    # Process frame for AI
-                    mi = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    res = landmarker.detect_for_video(mi, int((f_idx / 30.0) * 1000))
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                    res = landmarker.detect_for_video(mp_image, int((f_idx / 30.0) * 1000))
                     
                     if res.pose_landmarks:
                         l = res.pose_landmarks[0]
@@ -116,26 +107,21 @@ if video_file:
                     jump = np.split(air, np.where(np.diff(air) > 5)[0] + 1)[-1]
                     t_off, l_nd = valid_frames[jump[0]], valid_frames[jump[-1]]
                     
-                    # PHYSICS CALCULATION
-                    f_frames = l_nd - t_off
-                    f_time = f_frames / real_fps
+                    f_time = (l_nd - t_off) / real_fps
                     h_cm = (9.81 * (f_time**2) / 8) * 100
-                    
                     st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
-                    st.info(f"Using {f_frames} frames at {real_fps} FPS")
-
-                    # DISPLAY RESULTS (Re-opening cap for just two frames is memory safe)
-                    st.subheader("📸 AI Event Verification")
-                    v1, v2 = st.columns(2)
                     
-                    def get_frame(idx):
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                        r, img = cap.read()
-                        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if r else None
-
-                    v1.image(get_frame(t_off), caption=f"Takeoff (Frame {t_off})")
-                    v2.image(get_frame(l_nd), caption=f"Landing (Frame {l_nd})")
-                else: st.warning("Jump not detected.")
+                    v1, v2 = st.columns(2)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, t_off)
+                    ret_t, img_t = cap.read()
+                    if ret_t: v1.image(cv2.cvtColor(img_t, cv2.COLOR_BGR2RGB), caption="Takeoff")
+                    
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, l_nd)
+                    ret_l, img_l = cap.read()
+                    if ret_l: v2.image(cv2.cvtColor(img_l, cv2.COLOR_BGR2RGB), caption="Landing")
 
     cap.release()
-    if os.path.exists(tfile_path): os.remove(tfile_path)
+    # Explicit cleanup
+    if os.path.exists(video_path):
+        try: os.remove(video_path)
+        except: pass
