@@ -1,8 +1,8 @@
 streamlit
 mediapipe
 opencv-python-headless
+matplotlib
 numpy
 requests
-matplotlib
 
 
