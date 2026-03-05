@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Kinetic Vision Pro", page_icon="🧬", layout="wide")
 
-# Unique session state for each user
+# Unique session state initialization
 if 'takeoff_f' not in st.session_state: st.session_state.takeoff_f = None
 if 'landing_f' not in st.session_state: st.session_state.landing_f = None
 if 'scrub_idx' not in st.session_state: st.session_state.scrub_idx = 0
@@ -23,7 +23,7 @@ st.title("🧬 Kinetic Vision: Biomechanics Engine")
 video_file = st.file_uploader("Upload Video", type=['mp4', 'mov', 'avi'])
 
 if video_file:
-    # Use a unique temporary file per session
+    # Unique temporary file per session to avoid multi-user collisions
     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
         tmp_file.write(video_file.read())
         video_path = tmp_file.name
@@ -92,6 +92,7 @@ if video_file:
                     
                     if res.pose_landmarks:
                         l = res.pose_landmarks[0]
+                        # Tracking Foot Index/Toe Tip (Landmarks 31 and 32)
                         toe_y.append(1.0 - (l[31].y + l[32].y) / 2.0)
                         valid_frames.append(f_idx)
                     
@@ -119,9 +120,10 @@ if video_file:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, l_nd)
                     ret_l, img_l = cap.read()
                     if ret_l: v2.image(cv2.cvtColor(img_l, cv2.COLOR_BGR2RGB), caption="Landing")
+                else:
+                    st.warning("No jump detected. Ensure athlete's feet are visible.")
 
     cap.release()
-    # Explicit cleanup
     if os.path.exists(video_path):
         try: os.remove(video_path)
         except: pass
