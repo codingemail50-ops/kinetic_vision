@@ -133,29 +133,29 @@ if video_file:
                     h_cm = (9.81 * (f_time**2) / 8) * 100
                     st.success(f"### 📐 AI Result: {h_cm:.2f} cm")
                     
-                # --- DEBUG & PHYSICS TRACE ---
-                with st.expander("🛠️ Debug & Physics Trace"):
-                    # 1. Capture Metadata
-                    meta_fps = cap.get(cv2.CAP_PROP_FPS)
-                    st.write(f"**Video Metadata FPS:** `{meta_fps}`")
-                    st.write(f"**User-Input (Manual) FPS:** `{real_fps}`")
-                    
-                    # 2. Frame Logic
-                    st.write(f"**Takeoff Frame:** `{t_off}`")
-                    st.write(f"**Landing Frame:** `{l_nd}`")
-                    st.write(f"**Total Flight Frames:** `{l_nd - t_off}`")
-                    
-                    # 3. Calculation Breakdown
-                    st.divider()
-                    st.write("**Step-by-Step Calculation:**")
-                    
-                    calc_time = (l_nd - t_off) / real_fps
-                    st.latex(rf"Time = \frac{{{l_nd - t_off}}}{{{real_fps}}} = {calc_time:.4f}s")
-                    
-                    calc_height_m = (9.81 * (calc_time**2)) / 8
-                    st.latex(rf"Height(m) = \frac{{9.81 \times {calc_time:.4f}^2}}{{8}} = {calc_height_m:.4f}m")
-                    
-                    st.write(f"**Final Result:** `{calc_height_m * 100:.2f} cm`")
+                    # --- DEBUG & PHYSICS TRACE ---
+                    with st.expander("🛠️ Debug & Physics Trace"):
+                        # 1. Capture Metadata
+                        meta_fps = cap.get(cv2.CAP_PROP_FPS)
+                        st.write(f"**Video Metadata FPS:** `{meta_fps}`")
+                        st.write(f"**User-Input (Manual) FPS:** `{real_fps}`")
+                        
+                        # 2. Frame Logic
+                        st.write(f"**Takeoff Frame:** `{t_off}`")
+                        st.write(f"**Landing Frame:** `{l_nd}`")
+                        st.write(f"**Total Flight Frames:** `{l_nd - t_off}`")
+                        
+                        # 3. Calculation Breakdown
+                        st.divider()
+                        st.write("**Step-by-Step Calculation:**")
+                        
+                        calc_time = (l_nd - t_off) / real_fps
+                        st.latex(rf"Time = \frac{{{l_nd - t_off}}}{{{real_fps}}} = {calc_time:.4f}s")
+                        
+                        calc_height_m = (9.81 * (calc_time**2)) / 8
+                        st.latex(rf"Height(m) = \frac{{9.81 \times {calc_time:.4f}^2}}{{8}} = {calc_height_m:.4f}m")
+                        
+                        st.write(f"**Final Result:** `{calc_height_m * 100:.2f} cm`")
 
 
                     
