@@ -60,6 +60,12 @@ if video_file:
             ret, frame = cap.read()
             if ret: st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
 
+        if st.session_state.takeoff_f is not None and st.session_state.landing_f is not None:
+            f_frames = abs(st.session_state.landing_f - st.session_state.takeoff_f)
+            f_time = f_frames / real_fps
+            h_cm = (9.81 * (f_time**2) / 8) * 100
+            st.success(f"### 📊 Result: {h_cm:.2f} cm")
+    
     # --- AUTO MODE ---
     else:
         st.subheader("🤖 AI Automated Analysis")
