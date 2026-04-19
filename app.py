@@ -35,37 +35,35 @@ if video_file:
     # --- MANUAL MODE ---
     if analysis_mode == "Manual (Frame Scrubber)":
         st.subheader("🖱️ Manual Event Selection")
-        m_col1, m_col2 = st.columns([2, 1])
-        with m_col2:
-            def update_frame(delta):
-                st.session_state.scrub_idx = max(0, min(total_frames - 1, st.session_state.scrub_idx + delta))
-            
+        
+        # 1. Display Video Frame at the top (Reduced Size)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.scrub_idx)
+        ret, frame = cap.read()
+        if ret:
+            # Using a narrower column or use_container_width=False to reduce size
+            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=700)
+
+        # 2. Navigation Controls (Now below the frame)
+        ctrl_col1, ctrl_col2 = st.columns([1, 2])
+        
+        with ctrl_col1:
             st.write("**Frame Navigation**")
-            c1, c2 = st.columns(2)
-            c1.button("⬅️ -1", on_click=update_frame, args=(-1,))
-            c2.button("+1 ➡️", on_click=update_frame, args=(1,))
+            c1, c2, c3 = st.columns([1, 1, 2])
+            c1.button("⬅️ -1", on_click=lambda: st.session_state.update({"scrub_idx": max(0, st.session_state.scrub_idx - 1)}))
+            c2.button("+1 ➡️", on_click=lambda: st.session_state.update({"scrub_idx": min(total_frames - 1, st.session_state.scrub_idx + 1)}))
             st.slider("Scrubber", 0, total_frames - 1, key="scrub_idx")
-            
-            st.divider()
-            b1, b2 = st.columns(2)
+        
+        with ctrl_col2:
+            st.write("**Event Markers**")
+            b1, b2, b3 = st.columns(3)
             if b1.button("📌 Set Takeoff"): st.session_state.takeoff_f = st.session_state.scrub_idx
             if b2.button("📌 Set Landing"): st.session_state.landing_f = st.session_state.scrub_idx
-            
-            if st.button("🔄 Reset"):
+            if b3.button("🔄 Reset"):
                 st.session_state.takeoff_f = st.session_state.landing_f = None
                 st.rerun()
-
-        with m_col1:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.scrub_idx)
-            ret, frame = cap.read()
-            if ret: st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
-
-        if st.session_state.takeoff_f is not None and st.session_state.landing_f is not None:
-            f_frames = abs(st.session_state.landing_f - st.session_state.takeoff_f)
-            f_time = f_frames / real_fps
-            h_cm = (9.81 * (f_time**2) / 8) * 100
-            st.success(f"### 📊 Result: {h_cm:.2f} cm")
-    
+            
+            if st.session_state.takeoff_f is not None: st.info(f"Takeoff: Frame {st.session_state.takeoff_f}")
+            if st.session_state.landing_f is not None: st.info(f"Landing: Frame {st.session_state.landing_f}")    
     # --- AUTO MODE ---
     else:
         st.subheader("🤖 AI Automated Analysis")
