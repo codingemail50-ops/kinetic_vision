@@ -47,8 +47,9 @@ if video_file:
             if ret:
                 # use_container_width ensures it fills its 4/6ths of the screen 
                 # but doesn't grow so tall it forces a scroll
-                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
-
+                # st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
+                # Fixed width=500 prevents the image from expanding vertically
+                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=500)
         with layout_col2:
             # Adding empty space to "push" buttons to the bottom-right of the image area
             st.markdown("<br>" * 5, unsafe_allow_html=True) 
