@@ -79,6 +79,30 @@ if video_file:
 
             # Status readout at the very bottom right
             st.info(f"T-Off: {st.session_state.takeoff_f if st.session_state.takeoff_f else '--'} | Land: {st.session_state.landing_f if st.session_state.landing_f else '--'}")
+            st.divider()
+            
+            # --- Calculation Trigger ---
+            if st.button("📊 Calculate Jump Height", use_container_width=True):
+                if st.session_state.takeoff_f is not None and st.session_state.landing_f is not None:
+                    # Physics Logic
+                    f_frames = abs(st.session_state.landing_f - st.session_state.takeoff_f)
+                    f_time = f_frames / real_fps
+                    h_cm = (9.81 * (f_time**2) / 8) * 100
+                    
+                    # Sayers Formula for Peak Power
+                    p_watts = (60.7 * h_cm) + (45.3 * body_mass) - 2055
+                    
+                    # Display Results in the right column
+                    st.metric("Vertical Jump", f"{h_cm:.2f} cm")
+                    st.metric("Peak Power", f"{int(p_watts)} Watts")
+                    
+                    # Optional: Add the same Physics Trace for debugging
+                    with st.expander("🔬 View Math Trace"):
+                        st.latex(rf"t = \frac{{{f_frames}}}{{{real_fps}}} = {f_time:.4f}s")
+                        st.latex(rf"h = \frac{{9.81 \times {f_time:.4f}^2}}{{8}} \times 100")
+                else:
+                    st.error("Please set both Takeoff and Landing frames first.")
+    
     # --- AUTO MODE ---
     else:
         st.subheader("🤖 AI Automated Analysis")
