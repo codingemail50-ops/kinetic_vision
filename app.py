@@ -45,7 +45,7 @@ if video_file:
             ret, frame = cap.read()
             if ret:
                 # Fixed width (550) ensures it fits vertically alongside buttons
-                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=550)
+                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=200)
 
         # 2. Compact Control Bar (Immediately below the frame)
         st.write("---")
