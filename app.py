@@ -33,45 +33,51 @@ if video_file:
     real_fps = st.sidebar.number_input("Confirmed Capture FPS", value=240.0)
 
     # --- MANUAL MODE ---
+
     if analysis_mode == "Manual (Frame Scrubber)":
         st.subheader("🖱️ Manual Event Selection")
         
-        # 1. Centered and Scaled Frame (Constrained for Laptop Screens)
-        # We use three columns to center a smaller image
-        view_col1, view_col2, view_col3 = st.columns([1, 4, 1])
+        # We create two main columns: one for the video (Large) and one for controls (Small)
+        # Using [4, 2] ratio ensures the video is the hero but buttons fit on the right
+        layout_col1, layout_col2 = st.columns([4, 2])
         
-        with view_col2:
+        with layout_col1:
             cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.scrub_idx)
             ret, frame = cap.read()
             if ret:
-                # Fixed width (550) ensures it fits vertically alongside buttons
-                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=300)
+                # use_container_width ensures it fills its 4/6ths of the screen 
+                # but doesn't grow so tall it forces a scroll
+                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
 
-        # 2. Compact Control Bar (Immediately below the frame)
-        st.write("---")
-        ctrl_col1, ctrl_col2 = st.columns([2, 3])
-        
-        with ctrl_col1:
-            st.caption("↔️ Frame Navigation")
+        with layout_col2:
+            # Adding empty space to "push" buttons to the bottom-right of the image area
+            st.markdown("<br>" * 5, unsafe_allow_html=True) 
+            
+            st.write("### 🎛️ Controls")
+            
+            # --- Frame Navigation ---
+            st.caption("↔️ Navigation")
             nav_c1, nav_c2 = st.columns(2)
             nav_c1.button("⬅️ -1", on_click=lambda: st.session_state.update({"scrub_idx": max(0, st.session_state.scrub_idx - 1)}), use_container_width=True)
             nav_c2.button("+1 ➡️", on_click=lambda: st.session_state.update({"scrub_idx": min(total_frames - 1, st.session_state.scrub_idx + 1)}), use_container_width=True)
+            
             st.slider("Scrubber", 0, total_frames - 1, key="scrub_idx", label_visibility="collapsed")
-        
-        with ctrl_col2:
-            st.caption("📌 Marker Placement")
-            mark_c1, mark_c2, mark_c3 = st.columns(3)
-            if mark_c1.button("Set Takeoff", use_container_width=True): st.session_state.takeoff_f = st.session_state.scrub_idx
-            if mark_c2.button("Set Landing", use_container_width=True): st.session_state.landing_f = st.session_state.scrub_idx
-            if mark_c3.button("🔄 Reset", use_container_width=True):
+            
+            st.divider()
+
+            # --- Marker Placement ---
+            st.caption("📌 Event Markers")
+            if st.button("Set Takeoff", use_container_width=True): 
+                st.session_state.takeoff_f = st.session_state.scrub_idx
+            if st.button("Set Landing", use_container_width=True): 
+                st.session_state.landing_f = st.session_state.scrub_idx
+            
+            if st.button("🔄 Reset Markers", use_container_width=True):
                 st.session_state.takeoff_f = st.session_state.landing_f = None
                 st.rerun()
-            
-            # Inline Status Display
-            t_label = f"T-Off: {st.session_state.takeoff_f}" if st.session_state.takeoff_f is not None else "T-Off: --"
-            l_label = f"Land: {st.session_state.landing_f}" if st.session_state.landing_f is not None else "Land: --"
-            st.write(f"`{t_label}` | `{l_label}`")
-    
+
+            # Status readout at the very bottom right
+            st.info(f"T-Off: {st.session_state.takeoff_f if st.session_state.takeoff_f else '--'} | Land: {st.session_state.landing_f if st.session_state.landing_f else '--'}")
     # --- AUTO MODE ---
     else:
         st.subheader("🤖 AI Automated Analysis")
